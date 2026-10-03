@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 import cv2
 
+from . import dwg
 from .perspective import detect_panel
 from .vectorize import ImageError, Options, convert, decode, prepare
 
@@ -30,7 +31,7 @@ def parse_corners(text: str | None):
 @app.post("/api/convert")
 async def api_convert(
     file: UploadFile = File(...),
-    format: Literal["svg", "dxf", "zip"] = Form("dxf"),
+    format: Literal["svg", "dxf", "dwg", "zip"] = Form("dxf"),
     colors: int = Form(1, ge=1, le=16),
     threshold: int | None = Form(None, ge=0, le=255),
     invert: bool = Form(False),
@@ -83,11 +84,21 @@ async def api_convert(
         body, mime = convert(data, format, opts, stem)
     except (ImageError, ValueError) as e:
         raise HTTPException(400, str(e))
+    except dwg.DwgUnavailable as e:
+        raise HTTPException(501, str(e))
+    except dwg.DwgError as e:
+        raise HTTPException(502, str(e))
     name = f"{stem}.{format}"
     return Response(
         body, media_type=mime,
         headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
+
+
+@app.get("/api/capabilities")
+def api_capabilities():
+    """Qué formatos puede producir este servidor (DWG depende de que esté instalado LibreDWG)."""
+    return {"formats": ["svg", "dxf", "zip"] + (["dwg"] if dwg.available() else [])}
 
 
 @app.post("/api/detect-panel")

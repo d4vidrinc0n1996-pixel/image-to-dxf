@@ -10,6 +10,7 @@ Convierte imágenes (PNG, JPG, BMP, WebP…) a vectores **SVG** y **DXF**, con:
 - Modo blanco y negro con umbral automático (Otsu) para corte láser / CNC.
 - Tamaño final en mm (`width_mm`) o por escala; el eje Y se invierte para no salir espejado en CAD.
 - DXF con **splines** o con **polilíneas** (máxima compatibilidad con software CAM).
+- **DWG** (AutoCAD R2000) además de DXF y SVG, vía LibreDWG. Ver "Formato DWG" abajo.
 - Interfaz web, API REST, línea de comandos (por lotes) y Docker.
 
 ## Instalación
@@ -38,10 +39,24 @@ python -m app.cli a.png b.png c.jpg -o salida/ --format zip        # lote: SVG +
 
 ## API
 
-`POST /api/convert` (multipart): `file` y `format=svg|dxf|zip`, más las opciones de abajo.
+`POST /api/convert` (multipart): `file` y `format=svg|dxf|dwg|zip`, más las opciones de abajo.
 
 ```bash
 curl -F file=@logo.png -F format=dxf -F colors=4 -F width_mm=120 localhost:8000/api/convert -o logo.dxf
+```
+
+## Formato DWG
+
+DWG es un formato propietario de Autodesk; no hay escritor nativo en Python, así que el app genera un DXF y lo convierte con [LibreDWG](https://www.gnu.org/software/libredwg/) (`dxf2dwg`). Lo que debes saber:
+
+- Sale en **DWG R2000** (AC1015), que abre cualquier versión posterior de AutoCAD y la mayoría de programas CAD. LibreDWG todavía no escribe versiones más nuevas con fiabilidad.
+- Los colores de capa se convierten al color AutoCAD (ACI) más cercano: R2000 no admite RGB real. Si necesitas el color exacto, usa el DXF o el SVG.
+- LibreDWG marca su escritor como experimental. Las pruebas leen el DWG de vuelta y comprueban entidades, capas y coordenadas, pero **no se ha abierto en AutoCAD**: si lo vas a usar para producción, ábrelo y revísalo antes. El DXF sigue siendo el formato más seguro.
+- El **Dockerfile** ya compila LibreDWG. En local: instálalo (o compílalo) para que `dxf2dwg` esté en el `PATH`, o apunta `LIBREDWG_PREFIX` a su carpeta de instalación (por defecto `/opt/libredwg`). Si no está, el botón de DWG no aparece y la API responde `501`.
+- `GET /api/capabilities` indica qué formatos ofrece el servidor.
+
+```bash
+python -m app.cli letrero.jpg -o letrero.dwg --auto-perspective --colors 2 --width-mm 300
 ```
 
 ## Opciones

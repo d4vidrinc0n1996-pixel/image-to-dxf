@@ -9,9 +9,10 @@ import cv2
 import ezdxf
 import numpy as np
 import potrace
-from ezdxf.colors import rgb2int
+from ezdxf.colors import DXF_DEFAULT_COLORS, int2rgb, rgb2int
 from ezdxf.math import Bezier4P, Vec2, bezier_to_bspline
 
+from .dwg import dxf_to_dwg
 from .perspective import detect_panel, rectify, snap_corners
 
 Point = tuple[float, float]
@@ -635,6 +636,17 @@ def to_svg(vec: Vector) -> str:
     return "".join(out)
 
 
+def nearest_aci(rgb: tuple[int, int, int]) -> int:
+    """Índice de color AutoCAD (1-255) más parecido a un RGB."""
+    best, best_d = 7, 1e18
+    for i in range(1, 256):
+        c = int2rgb(DXF_DEFAULT_COLORS[i])
+        d = (c.r - rgb[0]) ** 2 + (c.g - rgb[1]) ** 2 + (c.b - rgb[2]) ** 2
+        if d < best_d:
+            best, best_d = i, d
+    return best
+
+
 def _unit_scale(vec: Vector, scale: float, width_mm: float | None) -> float:
     """Unidades DXF por píxel *trazado*."""
     if width_mm:
@@ -663,19 +675,27 @@ def to_dxf(
     width_mm: float | None = None,
     curve_mode: str = "spline",
     tolerance: float = 0.1,
+    compat: bool = False,
 ) -> bytes:
-    """DXF R2010 en mm: una capa por color. Y invertido para que no salga espejado."""
+    """DXF R2010 en mm: una capa por color. Y invertido para que no salga espejado.
+
+    compat=True genera un DXF R2000 mínimo (sin tablas de estilos extra, color de capa ACI)
+    pensado para convertirlo a DWG: R2000 no admite colores RGB.
+    """
     s = _unit_scale(vec, scale, width_mm)
     H = vec.traced_h
 
     def f(pt: Point) -> tuple[float, float]:
         return pt[0] * s, (H - pt[1]) * s
 
-    doc = ezdxf.new("R2010", setup=True)
+    doc = ezdxf.new("R2000" if compat else "R2010", setup=not compat)
     doc.units = ezdxf.units.MM
     msp = doc.modelspace()
     for layer in vec.layers:
-        doc.layers.add(layer.name, true_color=rgb2int(layer.color))
+        if compat:
+            doc.layers.add(layer.name, color=nearest_aci(layer.color))
+        else:
+            doc.layers.add(layer.name, true_color=rgb2int(layer.color))
         attr = {"layer": layer.name}
         for p in layer.paths:
             straight = all(c1 is None for c1, _, _ in p.segments)
@@ -700,6 +720,17 @@ def to_dxf(
     return buf.getvalue().encode("utf-8")
 
 
+def to_dwg(
+    vec: Vector,
+    scale: float = 1.0,
+    width_mm: float | None = None,
+    curve_mode: str = "spline",
+    tolerance: float = 0.1,
+) -> bytes:
+    """DWG R2000 (vía LibreDWG). Solo admite colores ACI, no RGB real."""
+    return dxf_to_dwg(to_dxf(vec, scale, width_mm, curve_mode, tolerance, compat=True))
+
+
 def to_zip(vec: Vector, o: Options, stem: str = "salida") -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -720,6 +751,8 @@ def convert(data: bytes, fmt: str, o: Options, stem: str = "salida") -> tuple[by
             to_dxf(vec, o.scale, o.width_mm, o.dxf_curves, o.tolerance),
             "application/dxf",
         )
+    if fmt == "dwg":
+        return to_dwg(vec, o.scale, o.width_mm, o.dxf_curves, o.tolerance), "application/acad"
     if fmt == "zip":
         return to_zip(vec, o, stem), "application/zip"
     raise ValueError(f"formato desconocido: {fmt}")

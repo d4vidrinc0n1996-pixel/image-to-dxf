@@ -9,8 +9,8 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Imagen -> SVG/DXF (curvas y capas de color)")
     p.add_argument("inputs", nargs="+")
     p.add_argument("-o", "--output", required=True,
-                   help="archivo (.svg/.dxf) si hay una entrada; carpeta si hay varias")
-    p.add_argument("--format", choices=["svg", "dxf", "zip"],
+                   help="archivo (.svg/.dxf/.dwg) si hay una entrada; carpeta si hay varias")
+    p.add_argument("--format", choices=["svg", "dxf", "dwg", "zip"],
                    help="por defecto: la extensión de -o, o dxf al usar carpeta")
     p.add_argument("--colors", type=int, default=1, help="1 = B/N; 2-16 = capas de color")
     p.add_argument("--threshold", type=int)
@@ -64,8 +64,8 @@ def main() -> None:
             dest = out / f"{src.stem}.{fmt}"
         else:
             fmt = a.format or out.suffix.lstrip(".").lower()
-            if fmt not in ("svg", "dxf", "zip"):
-                p.error("la salida debe terminar en .svg, .dxf o .zip")
+            if fmt not in ("svg", "dxf", "dwg", "zip"):
+                p.error("la salida debe terminar en .svg, .dxf, .dwg o .zip")
             dest = out
         body, _ = convert(src.read_bytes(), fmt, o, src.stem)
         dest.write_bytes(body)

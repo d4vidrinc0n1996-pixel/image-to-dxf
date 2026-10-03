@@ -58,6 +58,7 @@
 </div></fieldset>
 <button id="preview_btn">Vista previa</button>
 <button id="dxf">Descargar DXF</button>
+<button id="dwg" style="display:none" title="AutoCAD R2000 (experimental)">Descargar DWG</button>
 <button id="svg">Descargar SVG</button>
 <button id="zip">Descargar ambos (ZIP)</button>
 <span id="msg"></span> <span id="info"></span>
@@ -146,6 +147,8 @@ $('preview_btn').onclick = () => run('svg', false);
 $('svg').onclick = () => run('svg', true);
 $('dxf').onclick = () => run('dxf', true);
 $('zip').onclick = () => run('zip', true);
+$('dwg').onclick = () => run('dwg', true);
+fetch('/api/capabilities').then(r => r.json()).then(j => { if(j.formats.includes('dwg')) $('dwg').style.display = ''; }).catch(() => {});
 </script>
 </body>
 </html>
