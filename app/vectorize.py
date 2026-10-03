@@ -44,6 +44,9 @@ class Options:
     inset: float = 0.0  # fracción a recortar de cada borde tras enderezar (0-0.2)
     crop: tuple[int, int, int, int] | None = None  # (x0, y0, x1, y1) en píxeles originales
     denoise: bool = False  # filtro que quita ruido de foto sin borrar bordes
+    straighten: bool = True  # convierte tramos casi rectos en líneas exactas y funde los colineales
+    straight_tol: float = 0.7  # tolerancia de esa limpieza (px de la imagen)
+    axis_snap: float = 3.0  # alinea a horizontal/vertical los lados a menos de estos grados (0 = no)
     adapt_light: bool = True  # corrige la iluminación desigual de las fotos
     upscale: int | None = None  # supermuestreo antes de trazar (None = automático)
     max_dim: int = 2000  # reduce imágenes más grandes para ir más rápido
@@ -472,8 +475,127 @@ def vectorize(data: bytes, opts: Options | None = None) -> Vector:
     if u > 1:
         for l in layers:
             _rescale(l.paths, 1 / u)
+    if not o.centerline:  # la línea central ya sale de un esqueleto, no de un contorno
+        for l in layers:
+            l.paths = _tidy(l.paths, o)
     layers = [l for l in layers if l.paths]
     return Vector(ow, oh, layers, ratio, w, h)
+
+
+# --------------------------------------------------------- limpieza geométrica ---
+
+_LONG_CHORD = 120.0  # px: en tramos así de largos, poca panza = recta con ruido (en cortos puede ser un arco real)
+_LONG_FACTOR = 1.3
+
+
+def _line_dist(p, a, b) -> float:
+    d = np.subtract(b, a)
+    L = float(np.hypot(*d))
+    if L < 1e-9:
+        return float(np.hypot(*np.subtract(p, a)))
+    return abs(float(d[0] * (p[1] - a[1]) - d[1] * (p[0] - a[0]))) / L
+
+
+def _tidy_path(path: Path, tol: float, axis_deg: float) -> Path:
+    """Tramos casi rectos -> líneas; colineales -> una sola; casi H/V -> exactamente H/V."""
+    n = len(path.segments)
+    if n < 2:
+        return path
+    nodes = [path.start] + [e for _, _, e in path.segments[:-1 if path.closed else None]]
+    if not path.closed:
+        nodes = [path.start] + [e for _, _, e in path.segments]
+    m = len(path.segments)
+    # segs[i]: (c1, c2) de nodes[i] -> nodes[(i+1) % len(nodes)]
+    segs = [(c1, c2) for c1, c2, _ in path.segments]
+    N = len(nodes)
+
+    def end(i):  # extremo final del segmento i
+        return nodes[(i + 1) % N]
+
+    # 1) curvas casi planas -> rectas
+    for i in range(m):
+        c1, c2 = segs[i]
+        if c1 is not None:
+            a, b = nodes[i], end(i)
+            # tramos largos con muy poca panza son rectas con ruido; los cortos pueden ser arcos reales
+            lim = tol * (_LONG_FACTOR if np.hypot(b[0] - a[0], b[1] - a[1]) > _LONG_CHORD else 0.5)
+            if _line_dist(c1, a, b) <= lim and _line_dist(c2, a, b) <= lim:
+                segs[i] = (None, None)
+
+    # 2) para cerrados, empezar en un nodo que no sea continuación recta
+    if path.closed:
+        def straight_through(k):  # el nodo k une dos rectas casi colineales
+            if segs[k - 1][0] is not None or segs[k][0] is not None:
+                return False
+            return _line_dist(nodes[k], nodes[k - 1], end(k)) <= tol
+        start = next((k for k in range(N) if not straight_through(k)), None)
+        if start is None:
+            return path
+        nodes = nodes[start:] + nodes[:start]
+        segs = segs[start:] + segs[:start]
+
+    # 3) fundir rectas consecutivas casi colineales
+    out_nodes, out_segs = [nodes[0]], []
+    i = 0
+    while i < m:
+        if segs[i][0] is not None:
+            out_segs.append(segs[i]); out_nodes.append(end(i)); i += 1
+            continue
+        j = i
+        while j + 1 < m and segs[j + 1][0] is None:
+            a, b = nodes[i], end(j + 1)
+            if all(_line_dist(nodes[k], a, b) <= tol for k in range(i + 1, j + 2)):
+                j += 1
+            else:
+                break
+        out_segs.append((None, None)); out_nodes.append(end(j)); i = j + 1
+    if path.closed:
+        out_nodes = out_nodes[:-1]  # el último vuelve al primero
+    nodes, segs = [list(p) for p in out_nodes], out_segs
+    N, m = len(nodes), len(segs)
+    if m < 2 or (path.closed and m < 3):
+        return path
+
+    # 4) alinear con los ejes (moviendo también las asas de las curvas vecinas)
+    if axis_deg > 0:
+        handles = {}  # (i, 'c1'/'c2') -> [x, y] mutable
+
+        def move(k, dx, dy):
+            nodes[k][0] += dx; nodes[k][1] += dy
+            prev = (k - 1) % N if (path.closed or k > 0) else None
+            if prev is not None and prev < m and segs[prev][0] is not None:
+                c1, c2 = segs[prev]
+                segs[prev] = (c1, (c2[0] + dx, c2[1] + dy))
+            if k < m and segs[k][0] is not None:
+                c1, c2 = segs[k]
+                segs[k] = ((c1[0] + dx, c1[1] + dy), c2)
+
+        for i in range(m):
+            if segs[i][0] is not None:
+                continue
+            a, b = nodes[i], nodes[(i + 1) % N]
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            if np.hypot(dx, dy) < 6:
+                continue
+            ang = np.degrees(np.arctan2(abs(dy), abs(dx)))
+            if ang < axis_deg:  # horizontal
+                y = (a[1] + b[1]) / 2
+                move(i, 0, y - a[1]); move((i + 1) % N, 0, y - b[1])
+            elif ang > 90 - axis_deg:  # vertical
+                x = (a[0] + b[0]) / 2
+                move(i, x - a[0], 0); move((i + 1) % N, x - b[0], 0)
+
+    new = [((segs[i][0], segs[i][1], tuple(nodes[(i + 1) % N] if (path.closed or i + 1 < N) else nodes[-1]))) for i in range(m)]
+    new = [(None if c1 is None else (float(c1[0]), float(c1[1])),
+            None if c2 is None else (float(c2[0]), float(c2[1])),
+            (float(e[0]), float(e[1]))) for c1, c2, e in new]
+    return Path((float(nodes[0][0]), float(nodes[0][1])), new, path.closed)
+
+
+def _tidy(paths: list[Path], o: Options) -> list[Path]:
+    if not o.straighten and o.axis_snap <= 0:
+        return paths
+    return [_tidy_path(p, o.straight_tol if o.straighten else 0.0, o.axis_snap) for p in paths]
 
 
 # ----------------------------------------------------------------- salida ---

@@ -66,6 +66,9 @@ curl -F file=@logo.png -F format=dxf -F colors=4 -F width_mm=120 localhost:8000/
 | `inset` | 0 (auto: 0.01) | Fracción a recortar de cada borde tras enderezar (quita el filo del panel) |
 | `snap` | sí | Ajusta las esquinas manuales a los bordes reales |
 | `crop` | – | `x0,y0,x1,y1` en px: recorta antes de vectorizar (útil para fotos con fondo) |
+| `straighten` | sí | Limpia el trazo: tramos casi rectos pasan a ser líneas exactas y los colineales se funden |
+| `straight_tol` | 0.7 | Tolerancia de esa limpieza (px) |
+| `axis_snap` | 3 | Alinea a horizontal/vertical exactos los lados a menos de estos grados (0 = no) |
 | `adapt_light` | sí | Corrige la iluminación desigual de las fotos (centros de color locales) |
 | `denoise` | no | Filtro bilateral previo; útil solo con ruido fuerte |
 | `upscale` | auto | Supermuestreo 1–4 antes de trazar (auto: ×2 solo si la imagen mide < 600 px) |

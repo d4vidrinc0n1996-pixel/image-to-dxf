@@ -27,13 +27,15 @@ def main() -> None:
     p.add_argument("--min-length", type=float, default=10.0, help="centerline: largo mínimo (px)")
     p.add_argument("--crop", type=int, nargs=4, metavar=("X0", "Y0", "X1", "Y1"),
                    help="recorta antes de vectorizar (píxeles de la imagen original)")
-    p.add_argument("--no-denoise", action="store_true", help="no filtrar el ruido de la foto")
+    p.add_argument("--denoise", action="store_true", help="filtro de ruido previo (solo si la foto tiene mucho ruido)")
     p.add_argument("--upscale", type=int, help="supermuestreo 1-4 (por defecto automático)")
     p.add_argument("--corners", type=float, nargs=8, metavar="N",
                    help="4 esquinas del panel en la foto: x1 y1 x2 y2 x3 y3 x4 y4 (endereza la perspectiva)")
     p.add_argument("--auto-perspective", action="store_true", help="detecta el panel y lo endereza")
     p.add_argument("--aspect", type=float, help="ancho/alto real del panel (opcional)")
     p.add_argument("--inset", type=float, default=0.0, help="recorte de borde tras enderezar (0-0.2)")
+    p.add_argument("--no-straighten", action="store_true", help="no convertir tramos casi rectos en líneas")
+    p.add_argument("--axis-snap", type=float, default=3.0, help="grados para alinear a H/V (0 = no)")
     p.add_argument("--max-dim", type=int, default=2000)
     p.add_argument("--scale", type=float, default=1.0, help="unidades DXF por píxel")
     p.add_argument("--width-mm", type=float, help="ancho final (anula --scale)")
@@ -49,8 +51,8 @@ def main() -> None:
         centerline=a.centerline, min_length=a.min_length,
         crop=tuple(a.crop) if a.crop else None,
         corners=[(a.corners[i], a.corners[i + 1]) for i in range(0, 8, 2)] if a.corners else None,
-        auto_perspective=a.auto_perspective, aspect=a.aspect, inset=a.inset, denoise=not a.no_denoise,
-        upscale=a.upscale, max_dim=a.max_dim, scale=a.scale, width_mm=a.width_mm,
+        auto_perspective=a.auto_perspective, aspect=a.aspect, inset=a.inset, denoise=a.denoise,
+        upscale=a.upscale, straighten=not a.no_straighten, axis_snap=a.axis_snap, max_dim=a.max_dim, scale=a.scale, width_mm=a.width_mm,
         dxf_curves="polyline" if a.dxf_polyline else "spline", tolerance=a.tolerance,
     )
     out = Path(a.output)

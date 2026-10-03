@@ -48,7 +48,10 @@ async def api_convert(
     auto_perspective: bool = Form(False),
     aspect: float | None = Form(None, gt=0),
     inset: float = Form(0.0, ge=0, le=0.2),
-    denoise: bool = Form(True),
+    straighten: bool = Form(True),
+    straight_tol: float = Form(0.7, ge=0, le=5),
+    axis_snap: float = Form(3.0, ge=0, le=15),
+    denoise: bool = Form(False),
     upscale: int | None = Form(None, ge=1, le=4),
     max_dim: int = Form(2000, ge=100, le=6000),
     scale: float = Form(1.0, gt=0),
@@ -71,7 +74,8 @@ async def api_convert(
         smooth=smooth, opt_tolerance=opt_tolerance, epsilon=epsilon, min_area=min_area,
         skip_background=skip_background, centerline=centerline, min_length=min_length,
         crop=box, corners=parse_corners(corners), auto_perspective=auto_perspective,
-        aspect=aspect, inset=inset, denoise=denoise, upscale=upscale, max_dim=max_dim, scale=scale,
+        aspect=aspect, inset=inset, straighten=straighten, straight_tol=straight_tol,
+        axis_snap=axis_snap, denoise=denoise, upscale=upscale, max_dim=max_dim, scale=scale,
         width_mm=width_mm, dxf_curves=dxf_curves, tolerance=tolerance,
     )
     stem = Path(file.filename or "imagen").stem
