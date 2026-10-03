@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imagen a DXF</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:820px;margin:0 auto;padding:16px;color:#222}
+  fieldset{border:1px solid #ccc;border-radius:8px;margin:12px 0}
+  label{display:block;margin:8px 0;font-size:14px}
+  input[type=number]{width:90px}
+  button{padding:10px 18px;margin-right:8px;font-size:15px;cursor:pointer}
+  #preview{margin-top:16px;border:1px solid #ddd;min-height:80px;background:#fafafa}
+  #preview svg{max-width:100%;height:auto;display:block}
+  #msg{color:#b00020}
+</style>
+</head>
+<body>
+<h1>Imagen a vectores / DXF</h1>
+<input type="file" id="file" accept="image/*">
+<fieldset><legend>Opciones</legend>
+  <label>Umbral (vacío = automático) <input type="number" id="threshold" min="0" max="255"></label>
+  <label><input type="checkbox" id="invert"> Invertir (trazar zonas claras)</label>
+  <label>Suavizado (blur) <input type="number" id="blur" value="0" min="0" max="31"></label>
+  <label>Simplificación (px) <input type="number" id="epsilon" value="1" min="0" step="0.5"></label>
+  <label>Área mínima (px²) <input type="number" id="min_area" value="20" min="0"></label>
+  <label>Escala DXF (mm por píxel) <input type="number" id="scale" value="1" min="0.001" step="0.01"></label>
+</fieldset>
+<button id="svg">Vista previa / SVG</button>
+<button id="dxf">Descargar DXF</button>
+<span id="msg"></span>
+<div id="preview"></div>
+<script>
+const $ = id => document.getElementById(id);
+async function run(format){
+  $('msg').textContent = '';
+  if(!$('file').files[0]){ $('msg').textContent = 'Elige una imagen'; return; }
+  const fd = new FormData();
+  fd.append('file', $('file').files[0]);
+  fd.append('format', format);
+  for(const k of ['threshold','blur','epsilon','min_area','scale'])
+    if($(k).value !== '') fd.append(k, $(k).value);
+  fd.append('invert', $('invert').checked);
+  const r = await fetch('/api/convert', {method:'POST', body:fd});
+  if(!r.ok){ $('msg').textContent = (await r.json()).detail || 'Error'; return; }
+  const blob = await r.blob();
+  if(format === 'svg') $('preview').innerHTML = await blob.text();
+  const a = document.createElement('a');
+  if(format === 'dxf'){ a.href = URL.createObjectURL(blob); a.download = 'salida.dxf'; a.click(); }
+}
+$('svg').onclick = () => run('svg');
+$('dxf').onclick = () => run('dxf');
+</script>
+</body>
+</html>
