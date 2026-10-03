@@ -31,6 +31,7 @@
   <label>Área mínima (px²) <input type="number" id="min_area" value="20" min="0"></label>
   <label><input type="checkbox" id="centerline"> Línea central (trazos finos: planos, firmas, texto)</label>
   <label>Largo mínimo de línea (px, línea central) <input type="number" id="min_length" value="10" min="0"></label>
+  <label>Recorte x0,y0,x1,y1 (px, opcional) <input type="text" id="crop" placeholder="60,50,795,1195" size="20"></label>
   <label><input type="checkbox" id="skip_background" checked> Ignorar color de fondo</label>
 </div></fieldset>
 <fieldset><legend>DXF</legend><div class="cols">
@@ -55,7 +56,7 @@ async function run(format, download){
   const fd = new FormData();
   fd.append('file', f);
   fd.append('format', format);
-  for(const k of ['colors','smooth','threshold','blur','min_area','min_length','width_mm','scale','dxf_curves'])
+  for(const k of ['colors','smooth','threshold','blur','min_area','min_length','width_mm','scale','dxf_curves','crop'])
     if($(k).value !== '') fd.append(k, $(k).value);
   for(const k of ['invert','curves','skip_background','centerline']) fd.append(k, $(k).checked);
   $('info').textContent = 'Procesando…';

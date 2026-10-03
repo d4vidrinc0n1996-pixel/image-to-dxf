@@ -35,6 +35,7 @@ class Options:
     skip_background: bool = True  # colors>1: no vectoriza el color de fondo
     centerline: bool = False  # trazos finos -> una línea central (abierta) en vez de contorno
     min_length: float = 10.0  # centerline: descarta líneas más cortas (px)
+    crop: tuple[int, int, int, int] | None = None  # (x0, y0, x1, y1) en píxeles originales
     max_dim: int = 2000  # reduce imágenes más grandes para ir más rápido
     # --- DXF ---
     scale: float = 1.0  # unidades por píxel original
@@ -316,6 +317,13 @@ def vectorize(data: bytes, opts: Options | None = None) -> Vector:
     if img.ndim == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
+    if o.crop:
+        x0, y0, x1, y1 = o.crop
+        H, W = img.shape[:2]
+        x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, W), min(y1, H)
+        if x1 - x0 < 2 or y1 - y0 < 2:
+            raise ValueError("El recorte está vacío o fuera de la imagen")
+        img = img[y0:y1, x0:x1]
     ow, oh = img.shape[1], img.shape[0]
     ratio = 1.0
     if max(ow, oh) > o.max_dim:

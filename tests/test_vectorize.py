@@ -167,3 +167,20 @@ def test_centerline_api():
         data={"format": "svg", "centerline": "true", "min_length": 5},
     )
     assert r.status_code == 200 and b"stroke=" in r.content
+
+
+def test_crop_limits_area_and_validates():
+    def draw(i):
+        cv2.rectangle(i, (20, 20), (120, 120), (0, 0, 0), -1)  # dentro del recorte
+        cv2.rectangle(i, (300, 200), (380, 280), (0, 0, 0), -1)  # fuera
+
+    data = png(draw)
+    assert len(vectorize(data).layers[0].paths) == 2
+    vec = vectorize(data, Options(crop=(0, 0, 200, 150)))
+    assert (vec.width, vec.height) == (200, 150) and len(vec.layers[0].paths) == 1
+    with pytest.raises(ValueError):
+        vectorize(data, Options(crop=(500, 500, 600, 600)))
+    c = TestClient(app)
+    ok = c.post("/api/convert", files={"file": ("a.png", data)}, data={"format": "svg", "crop": "0,0,200,150"})
+    bad = c.post("/api/convert", files={"file": ("a.png", data)}, data={"crop": "x"})
+    assert ok.status_code == 200 and bad.status_code == 422

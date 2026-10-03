@@ -59,6 +59,7 @@ curl -F file=@logo.png -F format=dxf -F colors=4 -F width_mm=120 localhost:8000/
 | `invert` | no | Traza las zonas claras (solo `colors=1`) |
 | `blur` | 0 | Suavizado previo para reducir ruido |
 | `min_area` | 20 | Descarta manchas menores (px²) |
+| `crop` | – | `x0,y0,x1,y1` en px: recorta antes de vectorizar (útil para fotos con fondo) |
 | `max_dim` | 2000 | Reduce imágenes mayores para ir más rápido (el tamaño físico se conserva) |
 | `width_mm` / `scale` | – / 1 | Tamaño del DXF: ancho final, o unidades por píxel |
 | `dxf_curves` | spline | `spline` o `polyline` (aplana con `tolerance`, 0.1 mm) |
@@ -78,3 +79,11 @@ pip install -r requirements-dev.txt && pytest
 - Por defecto vectoriza regiones rellenas: un trazo fino sale como contorno cerrado. Para trazos finos usa `centerline`.
 - En `centerline`, los cruces se funden en un nodo y las líneas se cortan en cada cruce (cada tramo es una polilínea/spline aparte).
 - Los colores se agrupan por k-means; los degradados quedan en bandas. Fotos muy detalladas necesitan más colores y salen pesadas.
+
+## Ejemplo: foto de un letrero (blanco sobre verde)
+
+Recorta al panel y usa 2 colores; el verde (fondo) se ignora y quedan solo los gráficos blancos:
+
+```bash
+python -m app.cli letrero.jpg -o letrero.dxf --crop 62 52 795 1192 --colors 2 --width-mm 300
+```
