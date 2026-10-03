@@ -29,6 +29,11 @@ def main() -> None:
                    help="recorta antes de vectorizar (píxeles de la imagen original)")
     p.add_argument("--no-denoise", action="store_true", help="no filtrar el ruido de la foto")
     p.add_argument("--upscale", type=int, help="supermuestreo 1-4 (por defecto automático)")
+    p.add_argument("--corners", type=float, nargs=8, metavar="N",
+                   help="4 esquinas del panel en la foto: x1 y1 x2 y2 x3 y3 x4 y4 (endereza la perspectiva)")
+    p.add_argument("--auto-perspective", action="store_true", help="detecta el panel y lo endereza")
+    p.add_argument("--aspect", type=float, help="ancho/alto real del panel (opcional)")
+    p.add_argument("--inset", type=float, default=0.0, help="recorte de borde tras enderezar (0-0.2)")
     p.add_argument("--max-dim", type=int, default=2000)
     p.add_argument("--scale", type=float, default=1.0, help="unidades DXF por píxel")
     p.add_argument("--width-mm", type=float, help="ancho final (anula --scale)")
@@ -42,7 +47,9 @@ def main() -> None:
         curves=not a.no_curves, smooth=a.smooth, opt_tolerance=a.opt_tolerance,
         epsilon=a.epsilon, min_area=a.min_area, skip_background=not a.keep_background,
         centerline=a.centerline, min_length=a.min_length,
-        crop=tuple(a.crop) if a.crop else None, denoise=not a.no_denoise,
+        crop=tuple(a.crop) if a.crop else None,
+        corners=[(a.corners[i], a.corners[i + 1]) for i in range(0, 8, 2)] if a.corners else None,
+        auto_perspective=a.auto_perspective, aspect=a.aspect, inset=a.inset, denoise=not a.no_denoise,
         upscale=a.upscale, max_dim=a.max_dim, scale=a.scale, width_mm=a.width_mm,
         dxf_curves="polyline" if a.dxf_polyline else "spline", tolerance=a.tolerance,
     )

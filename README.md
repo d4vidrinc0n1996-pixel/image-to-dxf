@@ -5,6 +5,7 @@ Convierte imágenes (PNG, JPG, BMP, WebP…) a vectores **SVG** y **DXF**, con:
 - **Curvas Bézier** suaves (trazado tipo Potrace) o polígonos.
 - **Capas por color**: de 2 a 16 colores; cada color es una capa del DXF (con su color real) y un grupo del SVG.
 - **Modo línea central** (`centerline`): para planos, firmas y texto fino; genera líneas abiertas (una por trazo) en vez de contornos dobles, y en el SVG las dibuja con trazo.
+- **Corrección de perspectiva**: endereza fotos tomadas en ángulo. Detecta el panel solo (`auto_perspective`) o con 4 esquinas (`corners`); las esquinas se ajustan a los bordes reales con precisión subpíxel. En la web las marcas con clics sobre la foto.
 - Limpieza automática de motas y ruido en cada capa de color.
 - Modo blanco y negro con umbral automático (Otsu) para corte láser / CNC.
 - Tamaño final en mm (`width_mm`) o por escala; el eje Y se invierte para no salir espejado en CAD.
@@ -59,6 +60,11 @@ curl -F file=@logo.png -F format=dxf -F colors=4 -F width_mm=120 localhost:8000/
 | `invert` | no | Traza las zonas claras (solo `colors=1`) |
 | `blur` | 0 | Suavizado previo para reducir ruido |
 | `min_area` | 20 | Descarta manchas menores (px²) |
+| `auto_perspective` | no | Detecta el panel de la foto y lo endereza |
+| `corners` | – | 4 esquinas del panel `x1,y1,…,x4,y4` (CLI: `--corners x1 y1 … y4`) |
+| `aspect` | auto | Proporción real ancho/alto del panel; si se conoce, evita que salga estirado |
+| `inset` | 0 (auto: 0.01) | Fracción a recortar de cada borde tras enderezar (quita el filo del panel) |
+| `snap` | sí | Ajusta las esquinas manuales a los bordes reales |
 | `crop` | – | `x0,y0,x1,y1` en px: recorta antes de vectorizar (útil para fotos con fondo) |
 | `adapt_light` | sí | Corrige la iluminación desigual de las fotos (centros de color locales) |
 | `denoise` | no | Filtro bilateral previo; útil solo con ruido fuerte |
@@ -90,6 +96,15 @@ pip install -r requirements-dev.txt && pytest
 - Por defecto vectoriza regiones rellenas: un trazo fino sale como contorno cerrado. Para trazos finos usa `centerline`.
 - En `centerline`, los cruces se funden en un nodo y las líneas se cortan en cada cruce (cada tramo es una polilínea/spline aparte).
 - Los colores se agrupan por k-means; los degradados quedan en bandas. Fotos muy detalladas necesitan más colores y salen pesadas.
+
+## Fotos tomadas en ángulo
+
+```bash
+python -m app.cli letrero.jpg -o letrero.dxf --auto-perspective --colors 2 --width-mm 300
+python -m app.cli letrero.jpg -o letrero.dxf --corners 53 53 791 53 789 1224 57 1227 --aspect 0.62 --colors 2
+```
+
+Con `aspect` (ancho/alto reales del panel, p. ej. 300/470 mm) el dibujo sale sin estirarse; sin él se estima de los bordes de la foto, que en perspectiva fuerte no es exacto. Endpoints: `POST /api/detect-panel` (devuelve las esquinas) y `POST /api/rectify` (vista previa PNG). El `crop` se aplica *después* de enderezar.
 
 ## Ejemplo: foto de un letrero (blanco sobre verde)
 

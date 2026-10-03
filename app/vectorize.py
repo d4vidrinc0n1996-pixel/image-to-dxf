@@ -12,6 +12,8 @@ import potrace
 from ezdxf.colors import rgb2int
 from ezdxf.math import Bezier4P, Vec2, bezier_to_bspline
 
+from .perspective import detect_panel, rectify, snap_corners
+
 Point = tuple[float, float]
 # (c1, c2, end): curva Bézier cúbica.  (None, None, end): línea recta.
 Segment = tuple["Point | None", "Point | None", Point]
@@ -35,6 +37,11 @@ class Options:
     skip_background: bool = True  # colors>1: no vectoriza el color de fondo
     centerline: bool = False  # trazos finos -> una línea central (abierta) en vez de contorno
     min_length: float = 10.0  # centerline: descarta líneas más cortas (px)
+    corners: list[tuple[float, float]] | None = None  # 4 esquinas del panel en la foto (px)
+    auto_perspective: bool = False  # detecta el panel solo
+    aspect: float | None = None  # ancho/alto real del panel (si se conoce)
+    snap: bool = True  # ajusta las esquinas manuales a los bordes reales del panel
+    inset: float = 0.0  # fracción a recortar de cada borde tras enderezar (0-0.2)
     crop: tuple[int, int, int, int] | None = None  # (x0, y0, x1, y1) en píxeles originales
     denoise: bool = False  # filtro que quita ruido de foto sin borrar bordes
     adapt_light: bool = True  # corrige la iluminación desigual de las fotos
@@ -371,21 +378,36 @@ def _rescale(paths: list[Path], f: float) -> None:
         p.segments = [(sc(a), sc(b), sc(e)) for a, b, e in p.segments]
 
 
-def vectorize(data: bytes, opts: Options | None = None) -> Vector:
-    o = opts or Options()
-    if not 1 <= o.colors <= 16:
-        raise ValueError("colors debe estar entre 1 y 16")
+def decode(data: bytes) -> np.ndarray:
+    """Bytes de imagen -> BGR uint8 (aplana la transparencia sobre blanco)."""
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise ImageError("No se pudo leer la imagen")
     if img.dtype != np.uint8:  # 16 bits, etc.
         img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    if img.ndim == 3 and img.shape[2] == 4:  # aplana transparencia sobre blanco
+    if img.ndim == 3 and img.shape[2] == 4:
         a = img[:, :, 3:4].astype(np.float32) / 255
         img = (img[:, :, :3] * a + 255 * (1 - a)).astype(np.uint8)
     if img.ndim == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    return img
 
+
+def prepare(data: bytes, o: Options) -> np.ndarray:
+    """Decodifica y aplica corrección de perspectiva y recorte."""
+    img = decode(data)
+    if o.corners or o.auto_perspective:
+        corners, inset = o.corners, o.inset
+        if not corners:
+            corners = detect_panel(img)
+            if corners is None:
+                raise ValueError(
+                    "No se encontró el panel automáticamente; indica las 4 esquinas (corners)"
+                )
+            inset = inset or 0.01  # el borde del panel suele salir con un filo de otro color
+        elif o.snap:
+            corners = snap_corners(img, corners)
+        img = rectify(img, corners, o.aspect, inset)
     if o.crop:
         x0, y0, x1, y1 = o.crop
         H, W = img.shape[:2]
@@ -393,6 +415,14 @@ def vectorize(data: bytes, opts: Options | None = None) -> Vector:
         if x1 - x0 < 2 or y1 - y0 < 2:
             raise ValueError("El recorte está vacío o fuera de la imagen")
         img = img[y0:y1, x0:x1]
+    return img
+
+
+def vectorize(data: bytes, opts: Options | None = None) -> Vector:
+    o = opts or Options()
+    if not 1 <= o.colors <= 16:
+        raise ValueError("colors debe estar entre 1 y 16")
+    img = prepare(data, o)
     ow, oh = img.shape[1], img.shape[0]
     ratio = 1.0
     if max(ow, oh) > o.max_dim:

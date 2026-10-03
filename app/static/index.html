@@ -20,6 +20,21 @@
 <body>
 <h1>Imagen a vectores / DXF</h1>
 <input type="file" id="file" accept="image/*">
+<fieldset><legend>Perspectiva (foto tomada en ángulo)</legend>
+  <p style="font-size:13px;color:#555;margin:4px 0">Detecta el panel o marca sus 4 esquinas con clics sobre la foto. Se endereza antes de vectorizar.</p>
+  <button type="button" id="detect">Detectar panel</button>
+  <button type="button" id="pick">Marcar esquinas</button>
+  <button type="button" id="clear">Quitar</button>
+  <label><input type="checkbox" id="use_persp"> Enderezar con estas esquinas</label>
+  <div class="cols">
+    <label>Esquinas (x1,y1,…,x4,y4) <input type="text" id="corners" size="34"></label>
+    <label>Proporción real ancho/alto (opcional) <input type="number" id="aspect" min="0.05" step="0.01"></label>
+    <label>Recortar borde (0–0.2) <input type="number" id="inset" value="0.01" min="0" max="0.2" step="0.005"></label>
+  </div>
+  <div style="position:relative;display:inline-block;max-width:100%"><canvas id="cv" style="max-width:100%;display:none;cursor:crosshair"></canvas></div>
+  <div><button type="button" id="rect_btn">Ver enderezada</button></div>
+  <img id="rect_img" style="max-width:100%;display:none;border:1px solid #ddd;margin-top:8px">
+</fieldset>
 <fieldset><legend>Vectorización</legend><div class="cols">
   <label>Colores (1 = blanco y negro, 2-16 = capas)
     <input type="number" id="colors" value="1" min="1" max="16"></label>
@@ -56,9 +71,10 @@ async function run(format, download){
   const fd = new FormData();
   fd.append('file', f);
   fd.append('format', format);
-  for(const k of ['colors','smooth','threshold','blur','min_area','min_length','width_mm','scale','dxf_curves','crop'])
+  for(const k of ['colors','smooth','threshold','blur','min_area','min_length','width_mm','scale','dxf_curves','crop','aspect'])
     if($(k).value !== '') fd.append(k, $(k).value);
   for(const k of ['invert','curves','skip_background','centerline']) fd.append(k, $(k).checked);
+  if($('use_persp').checked && $('corners').value){ fd.append('corners', $('corners').value); fd.append('inset', $('inset').value); }
   $('info').textContent = 'Procesando…';
   const r = await fetch('/api/convert', {method:'POST', body:fd});
   $('info').textContent = '';
@@ -74,6 +90,58 @@ async function run(format, download){
     a.download = f.name.replace(/\.[^.]+$/, '') + '.' + format; a.click();
   }
 }
+/* ---- selector de esquinas ---- */
+let img = null, pts = [], picking = false;
+const cv = $('cv'), ctx = cv.getContext('2d');
+function redraw(){
+  if(!img) return;
+  cv.width = img.naturalWidth; cv.height = img.naturalHeight; cv.style.display = 'block';
+  ctx.drawImage(img, 0, 0);
+  const r = Math.max(6, cv.width / 120);
+  ctx.lineWidth = r / 2; ctx.strokeStyle = '#e00'; ctx.fillStyle = '#e00';
+  ctx.beginPath(); pts.forEach((p,i)=> i ? ctx.lineTo(p[0],p[1]) : ctx.moveTo(p[0],p[1]));
+  if(pts.length === 4) ctx.closePath(); ctx.stroke();
+  pts.forEach(p => { ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill(); });
+  $('corners').value = pts.length === 4 ? pts.map(p => p.map(Math.round).join(',')).join(',') : '';
+  $('use_persp').checked = pts.length === 4;
+}
+$('file').onchange = () => {
+  const f = $('file').files[0]; pts = []; $('rect_img').style.display = 'none';
+  if(!f) return;
+  img = new Image(); img.onload = redraw; img.src = URL.createObjectURL(f);
+};
+cv.onclick = e => {
+  if(!picking) return;
+  const b = cv.getBoundingClientRect();
+  pts.push([(e.clientX - b.left) * cv.width / b.width, (e.clientY - b.top) * cv.height / b.height]);
+  if(pts.length === 4) picking = false;
+  redraw();
+};
+$('pick').onclick = () => { if(!img){ $('msg').textContent = 'Elige una imagen'; return; } pts = []; picking = true; $('msg').textContent = 'Haz clic en las 4 esquinas del panel'; redraw(); };
+$('clear').onclick = () => { pts = []; picking = false; $('rect_img').style.display = 'none'; $('msg').textContent = ''; redraw(); };
+$('corners').oninput = () => {
+  const v = $('corners').value.split(',').map(Number);
+  if(v.length === 8 && v.every(x => !isNaN(x))){ pts = [0,1,2,3].map(i => [v[2*i], v[2*i+1]]); const c = $('corners').value; redraw(); $('corners').value = c; $('use_persp').checked = true; }
+};
+$('detect').onclick = async () => {
+  const f = $('file').files[0]; if(!f){ $('msg').textContent = 'Elige una imagen'; return; }
+  $('msg').textContent = ''; $('info').textContent = 'Buscando panel…';
+  const fd = new FormData(); fd.append('file', f);
+  const j = await (await fetch('/api/detect-panel', {method:'POST', body:fd})).json();
+  $('info').textContent = '';
+  if(!j.corners){ $('msg').textContent = 'No se encontró el panel: márcalo con clics'; return; }
+  pts = j.corners; redraw();
+};
+$('rect_btn').onclick = async () => {
+  const f = $('file').files[0];
+  if(!f || !$('corners').value){ $('msg').textContent = 'Detecta o marca las esquinas primero'; return; }
+  const fd = new FormData(); fd.append('file', f);
+  fd.append('corners', $('corners').value); fd.append('inset', $('inset').value);
+  if($('aspect').value) fd.append('aspect', $('aspect').value);
+  const r = await fetch('/api/rectify', {method:'POST', body:fd});
+  if(!r.ok){ $('msg').textContent = (await r.json()).detail || 'Error'; return; }
+  $('rect_img').src = URL.createObjectURL(await r.blob()); $('rect_img').style.display = 'block';
+};
 $('preview_btn').onclick = () => run('svg', false);
 $('svg').onclick = () => run('svg', true);
 $('dxf').onclick = () => run('dxf', true);
