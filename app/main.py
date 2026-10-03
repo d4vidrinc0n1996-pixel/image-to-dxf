@@ -27,6 +27,8 @@ async def api_convert(
     epsilon: float = Form(1.0, ge=0, le=50),
     min_area: float = Form(20.0, ge=0),
     skip_background: bool = Form(True),
+    centerline: bool = Form(False),
+    min_length: float = Form(10.0, ge=0),
     max_dim: int = Form(2000, ge=100, le=6000),
     scale: float = Form(1.0, gt=0),
     width_mm: float | None = Form(None, gt=0),
@@ -38,7 +40,7 @@ async def api_convert(
         raise HTTPException(413, "Imagen demasiado grande (máx. 20 MB)")
     opts = Options(
         colors, threshold, invert, blur, curves, smooth, opt_tolerance, epsilon,
-        min_area, skip_background, max_dim, scale, width_mm, dxf_curves, tolerance,
+        min_area, skip_background, centerline, min_length, max_dim, scale, width_mm, dxf_curves, tolerance,
     )
     stem = Path(file.filename or "imagen").stem
     try:

@@ -33,6 +33,8 @@ class Options:
     epsilon: float = 1.0  # simplificación de polígonos (curves=False)
     min_area: float = 20.0  # descarta manchas menores (px²)
     skip_background: bool = True  # colors>1: no vectoriza el color de fondo
+    centerline: bool = False  # trazos finos -> una línea central (abierta) en vez de contorno
+    min_length: float = 10.0  # centerline: descarta líneas más cortas (px)
     max_dim: int = 2000  # reduce imágenes más grandes para ir más rápido
     # --- DXF ---
     scale: float = 1.0  # unidades por píxel original
@@ -45,6 +47,7 @@ class Options:
 class Path:
     start: Point
     segments: list[Segment]
+    closed: bool = True
 
 
 @dataclass
@@ -52,6 +55,7 @@ class Layer:
     name: str
     color: tuple[int, int, int]
     paths: list[Path] = field(default_factory=list)
+    stroke: bool = False  # líneas centrales: se dibujan con trazo, no con relleno
 
 
 @dataclass
@@ -74,8 +78,171 @@ def _hex(rgb) -> str:
     return "{:02X}{:02X}{:02X}".format(*rgb)
 
 
+
+def _thin(mask: np.ndarray) -> np.ndarray:
+    """Esqueleto de 1 px (Zhang-Suen vectorizado con numpy)."""
+    ys, xs = np.nonzero(mask)
+    if len(ys) == 0:
+        return mask
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1  # recorta al contenido
+    full = np.zeros(mask.shape, bool)
+    full[y0:y1, x0:x1] = _thin_core(mask[y0:y1, x0:x1])
+    return full
+
+
+def _thin_core(mask: np.ndarray) -> np.ndarray:
+    img = np.pad(mask.astype(np.uint8), 1)
+    while True:
+        changed = False
+        for step in (0, 1):
+            P = img
+            n = [P[:-2, 1:-1], P[:-2, 2:], P[1:-1, 2:], P[2:, 2:],
+                 P[2:, 1:-1], P[2:, :-2], P[1:-1, :-2], P[:-2, :-2]]  # N,NE,E,SE,S,SW,W,NW
+            B = sum(x.astype(np.int16) for x in n)
+            A = sum(((n[i] == 0) & (n[(i + 1) % 8] == 1)).astype(np.int16) for i in range(8))
+            N, E, S, W = n[0], n[2], n[4], n[6]
+            if step == 0:
+                c = (N * E * S == 0) & (E * S * W == 0)
+            else:
+                c = (N * E * W == 0) & (N * S * W == 0)
+            rm = (P[1:-1, 1:-1] == 1) & (B >= 2) & (B <= 6) & (A == 1) & c
+            if rm.any():
+                img[1:-1, 1:-1][rm] = 0
+                changed = True
+        if not changed:
+            return img[1:-1, 1:-1].astype(bool)
+
+
+_NB = [(-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]
+
+
+def _skeleton_lines(skel: np.ndarray) -> list[list[Point]]:
+    """Recorre el esqueleto y devuelve polilíneas (x, y). Los cruces se funden en un nodo."""
+    ys, xs = np.nonzero(skel)
+    pix = set(zip(xs.tolist(), ys.tolist()))
+
+    def nbrs(p):
+        x, y = p
+        return [(x + dx, y + dy) for dy, dx in _NB if (x + dx, y + dy) in pix]
+
+    def crossings(p):  # grupos contiguos de vecinos alrededor del píxel
+        x, y = p
+        ring = [(x + dx, y + dy) in pix for dy, dx in _NB]
+        return sum(1 for i in range(8) if not ring[i] and ring[(i + 1) % 8])
+
+    kind = {}  # "end" | "junction"
+    for p in pix:
+        n = len(nbrs(p))
+        if n <= 1:
+            kind[p] = "end"
+        elif crossings(p) >= 3:
+            kind[p] = "junction"
+    # funde píxeles de cruce vecinos en un único nodo (centroide)
+    centre: dict[tuple[int, int], Point] = {}
+    junc = [p for p, k in kind.items() if k == "junction"]
+    if junc:
+        m = np.zeros(skel.shape, np.uint8)
+        for x, y in junc:
+            m[y, x] = 1
+        _, lab = cv2.connectedComponents(m, connectivity=8)
+        groups: dict[int, list] = {}
+        for x, y in junc:
+            groups.setdefault(int(lab[y, x]), []).append((x, y))
+        for g in groups.values():
+            cx, cy = np.mean(g, axis=0)
+            for p in g:
+                centre[p] = (float(cx), float(cy))
+    group_of = {p: centre[p] for p in centre}
+
+    seen: set[frozenset] = set()
+    lines: list[list[Point]] = []
+
+    def point(p):
+        return group_of.get(p, (float(p[0]), float(p[1])))
+
+    def walk(start, nxt):
+        pts = [point(start)]
+        prev, cur = start, nxt
+        seen.add(frozenset((start, nxt)))
+        while True:
+            if cur in kind or cur == start:
+                pts.append(point(cur))
+                return pts
+            pts.append((float(cur[0]), float(cur[1])))
+            opts = [q for q in nbrs(cur) if q != prev and frozenset((cur, q)) not in seen]
+            far = [q for q in opts if max(abs(q[0] - prev[0]), abs(q[1] - prev[1])) > 1]
+            opts = far or opts
+            if not opts:
+                return pts
+            opts.sort(key=lambda q: abs(q[0] - cur[0]) + abs(q[1] - cur[1]))
+            prev, cur = cur, opts[0]
+            seen.add(frozenset((prev, cur)))
+
+    for n in sorted(kind):
+        for q in nbrs(n):
+            if frozenset((n, q)) in seen:
+                continue
+            if n in group_of and q in group_of and group_of[n] == group_of[q]:
+                continue
+            lines.append(walk(n, q))
+    for p in sorted(pix):  # lazos cerrados sin nodos
+        for q in nbrs(p):
+            if frozenset((p, q)) not in seen:
+                lines.append(walk(p, q))
+    return lines
+
+
+def _smooth_segments(pts: list[Point]) -> list[Segment]:
+    """Bézier a través de los puntos; las esquinas marcadas se mantienen vivas."""
+    n = len(pts)
+    P = [np.array(p) for p in pts]
+    corner = [False] * n
+    for i in range(1, n - 1):
+        a, b = P[i] - P[i - 1], P[i + 1] - P[i]
+        na, nb = np.linalg.norm(a), np.linalg.norm(b)
+        if na and nb and (a @ b) / (na * nb) < 0.5:  # giro > 60°
+            corner[i] = True
+    tan = []
+    for i in range(n):
+        if i in (0, n - 1) or corner[i]:
+            tan.append(None)
+        else:
+            tan.append((P[i + 1] - P[i - 1]) / 6)
+    segs: list[Segment] = []
+    for i in range(n - 1):
+        d = P[i + 1] - P[i]
+        c1 = P[i] + (tan[i] if tan[i] is not None else d / 3)
+        c2 = P[i + 1] - (tan[i + 1] if tan[i + 1] is not None else d / 3)
+        segs.append(((float(c1[0]), float(c1[1])), (float(c2[0]), float(c2[1])),
+                     (float(P[i + 1][0]), float(P[i + 1][1]))))
+    return segs
+
+
+def _trace_centerline(mask: np.ndarray, o: Options) -> list[Path]:
+    out = []
+    for line in _skeleton_lines(_thin(mask)):
+        if len(line) < max(o.min_length, 2):
+            continue
+        arr = np.array(line, np.float32).reshape(-1, 1, 2)
+        closed = line[0] == line[-1] and len(line) > 3
+        if o.epsilon > 0:
+            arr = cv2.approxPolyDP(arr, max(o.epsilon, 0.5), closed)
+        pts = [(float(x), float(y)) for x, y in arr.reshape(-1, 2)]
+        if closed and pts[0] != pts[-1]:
+            pts.append(pts[0])
+        if len(pts) < 2:
+            continue
+        if o.curves and len(pts) > 2:
+            segs = _smooth_segments(pts)
+        else:
+            segs = [(None, None, q) for q in pts[1:]]
+        out.append(Path(pts[0], segs, closed))
+    return out
+
 def _trace_mask(mask: np.ndarray, o: Options) -> list[Path]:
     """mask: bool, True = zona a vectorizar."""
+    if o.centerline:
+        return _trace_centerline(mask, o)
     if o.curves:
         bm = potrace.Bitmap(~mask)  # potracer traza lo que NO es True
         plist = bm.trace(
@@ -129,6 +296,11 @@ def _quantize(img: np.ndarray, k: int):
     return labels.reshape(h, w), centers
 
 
+def _clean(mask: np.ndarray) -> np.ndarray:
+    """Quita motas y suaviza bordes de una máscara por color (mediana 5x5)."""
+    return cv2.medianBlur(mask.astype(np.uint8) * 255, 5) > 127
+
+
 def vectorize(data: bytes, opts: Options | None = None) -> Vector:
     o = opts or Options()
     if not 1 <= o.colors <= 16:
@@ -164,7 +336,7 @@ def vectorize(data: bytes, opts: Options | None = None) -> Vector:
             _, m = cv2.threshold(gray, 0, 255, mode | cv2.THRESH_OTSU)
         else:
             _, m = cv2.threshold(gray, o.threshold, 255, mode)
-        layers.append(Layer("TRAZO", (0, 0, 0), _trace_mask(m > 0, o)))
+        layers.append(Layer("TRAZO", (0, 0, 0), _trace_mask(m > 0, o), o.centerline))
     else:
         labels, centers = _quantize(img, o.colors)
         counts = np.bincount(labels.ravel(), minlength=len(centers))
@@ -179,7 +351,7 @@ def vectorize(data: bytes, opts: Options | None = None) -> Vector:
             n += 1
             rgb = tuple(int(v) for v in centers[i][::-1].round())
             layers.append(
-                Layer(f"COLOR_{n}_{_hex(rgb)}", rgb, _trace_mask(labels == i, o))
+                Layer(f"COLOR_{n}_{_hex(rgb)}", rgb, _trace_mask(_clean(labels == i), o), o.centerline)
             )
     layers = [l for l in layers if l.paths]
     return Vector(ow, oh, layers, ratio, w, h)
@@ -207,9 +379,15 @@ def to_svg(vec: Vector) -> str:
                     d.append(
                         "C" + " ".join(f"{_fmt(a)},{_fmt(b)}" for a, b in (c1, c2, e))
                     )
-            parts.append("".join(d) + "Z")
+            parts.append("".join(d) + ("Z" if p.closed else ""))
+        style = (
+            f'fill="none" stroke="#{_hex(layer.color)}" stroke-width="1" '
+            'stroke-linecap="round" stroke-linejoin="round"'
+            if layer.stroke
+            else f'fill="#{_hex(layer.color)}" fill-rule="evenodd"'
+        )
         out.append(
-            f'<g id="{layer.name}" fill="#{_hex(layer.color)}" fill-rule="evenodd">'
+            f'<g id="{layer.name}" {style}>'
             f'<path d="{" ".join(parts)}"/></g>'
         )
     out.append("</svg>")
@@ -261,15 +439,16 @@ def to_dxf(
         for p in layer.paths:
             straight = all(c1 is None for c1, _, _ in p.segments)
             if straight:
-                pts = [f(p.start)] + [f(e) for _, _, e in p.segments[:-1]]
-                msp.add_lwpolyline(pts, close=True, dxfattribs=attr)
+                ends = p.segments[:-1] if p.closed else p.segments
+                pts = [f(p.start)] + [f(e) for _, _, e in ends]
+                msp.add_lwpolyline(pts, close=p.closed, dxfattribs=attr)
                 continue
             chain = _bezier_chain(p, f)
             if curve_mode == "polyline":
                 pts: list = []
                 for b in chain:
                     pts.extend(list(b.flattening(tolerance))[:-1])
-                msp.add_lwpolyline([(v.x, v.y) for v in pts], close=True, dxfattribs=attr)
+                msp.add_lwpolyline([(v.x, v.y) for v in pts], close=p.closed, dxfattribs=attr)
             else:
                 bs = bezier_to_bspline(chain)
                 msp.add_open_spline(

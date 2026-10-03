@@ -22,6 +22,9 @@ def main() -> None:
     p.add_argument("--epsilon", type=float, default=1.0)
     p.add_argument("--min-area", type=float, default=20.0)
     p.add_argument("--keep-background", action="store_true")
+    p.add_argument("--centerline", action="store_true",
+                   help="traza la línea central de los trazos finos (planos, firmas)")
+    p.add_argument("--min-length", type=float, default=10.0, help="centerline: largo mínimo (px)")
     p.add_argument("--max-dim", type=int, default=2000)
     p.add_argument("--scale", type=float, default=1.0, help="unidades DXF por píxel")
     p.add_argument("--width-mm", type=float, help="ancho final (anula --scale)")
@@ -32,7 +35,7 @@ def main() -> None:
 
     o = Options(
         a.colors, a.threshold, a.invert, a.blur, not a.no_curves, a.smooth,
-        a.opt_tolerance, a.epsilon, a.min_area, not a.keep_background, a.max_dim,
+        a.opt_tolerance, a.epsilon, a.min_area, not a.keep_background, a.centerline, a.min_length, a.max_dim,
         a.scale, a.width_mm, "polyline" if a.dxf_polyline else "spline", a.tolerance,
     )
     out = Path(a.output)

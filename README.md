@@ -4,6 +4,8 @@ Convierte imágenes (PNG, JPG, BMP, WebP…) a vectores **SVG** y **DXF**, con:
 
 - **Curvas Bézier** suaves (trazado tipo Potrace) o polígonos.
 - **Capas por color**: de 2 a 16 colores; cada color es una capa del DXF (con su color real) y un grupo del SVG.
+- **Modo línea central** (`centerline`): para planos, firmas y texto fino; genera líneas abiertas (una por trazo) en vez de contornos dobles, y en el SVG las dibuja con trazo.
+- Limpieza automática de motas y ruido en cada capa de color.
 - Modo blanco y negro con umbral automático (Otsu) para corte láser / CNC.
 - Tamaño final en mm (`width_mm`) o por escala; el eje Y se invierte para no salir espejado en CAD.
 - DXF con **splines** o con **polilíneas** (máxima compatibilidad con software CAM).
@@ -29,6 +31,7 @@ docker build -t image-to-dxf . && docker run -p 8000:8000 image-to-dxf
 python -m app.cli logo.png -o logo.dxf --width-mm 100              # B/N, 100 mm de ancho
 python -m app.cli foto.jpg -o foto.dxf --colors 5 --width-mm 200   # 5 capas de color
 python -m app.cli logo.png -o logo.dxf --dxf-polyline              # sin splines
+python -m app.cli plano.png -o plano.dxf --centerline --width-mm 300  # líneas finas
 python -m app.cli a.png b.png c.jpg -o salida/ --format zip        # lote: SVG + DXF
 ```
 
@@ -46,6 +49,8 @@ curl -F file=@logo.png -F format=dxf -F colors=4 -F width_mm=120 localhost:8000/
 |---|---|---|
 | `colors` | 1 | 1 = blanco/negro; 2–16 = una capa por color |
 | `skip_background` | sí | En multicolor, ignora el color que domina el borde |
+| `centerline` | no | Traza la línea central de los trazos finos (líneas abiertas) |
+| `min_length` | 10 | Con `centerline`: descarta líneas más cortas (px), quita rebabas |
 | `curves` | sí | Curvas Bézier; si no, polígonos |
 | `smooth` | 1.0 | 0 = todo esquinas … 1.33 = muy redondeado |
 | `opt_tolerance` | 0.2 | Mayor = menos nodos, curvas más simplificadas |
@@ -70,5 +75,6 @@ pip install -r requirements-dev.txt && pytest
 
 ## Limitaciones
 
-- Vectoriza regiones rellenas (siluetas y áreas de color), no líneas centrales: un trazo fino se convierte en un contorno cerrado.
+- Por defecto vectoriza regiones rellenas: un trazo fino sale como contorno cerrado. Para trazos finos usa `centerline`.
+- En `centerline`, los cruces se funden en un nodo y las líneas se cortan en cada cruce (cada tramo es una polilínea/spline aparte).
 - Los colores se agrupan por k-means; los degradados quedan en bandas. Fotos muy detalladas necesitan más colores y salen pesadas.

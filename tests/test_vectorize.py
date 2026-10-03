@@ -126,3 +126,44 @@ def test_api():
     r = c.post("/api/convert", files=files, data={"colors": 99})
     assert r.status_code == 422
     assert c.get("/").status_code == 200
+
+
+def lines_png() -> bytes:
+    def draw(i):
+        cv2.rectangle(i, (30, 40), (230, 240), (0, 0, 0), 5)
+        cv2.line(i, (260, 40), (380, 260), (0, 0, 0), 4)
+
+    return png(draw)
+
+
+def test_centerline_gives_open_lines_not_outlines():
+    vec = vectorize(lines_png(), Options(centerline=True))
+    paths = vec.layers[0].paths
+    assert vec.layers[0].stroke
+    assert any(not p.closed for p in paths)
+    # el contorno de un trazo de 5 px tendría ~2x el perímetro; la línea central, uno
+    length = sum(
+        np.hypot(e[0] - s[0], e[1] - s[1])
+        for p in paths
+        for s, e in zip([p.start] + [x[2] for x in p.segments], [x[2] for x in p.segments])
+    )
+    assert 950 < length < 1100  # cuadrado 4*200 + diagonal ~250
+
+
+def test_centerline_outputs():
+    vec = vectorize(lines_png(), Options(centerline=True))
+    svg = to_svg(vec)
+    assert 'fill="none"' in svg and 'stroke="#000000"' in svg
+    doc = read_dxf(to_dxf(vec, width_mm=100, curve_mode="polyline"))
+    ents = list(doc.modelspace())
+    assert ents and any(not e.closed for e in ents if e.dxftype() == "LWPOLYLINE")
+    assert read_dxf(to_dxf(vec, width_mm=100))  # splines abiertos también válidos
+
+
+def test_centerline_api():
+    r = TestClient(app).post(
+        "/api/convert",
+        files={"file": ("p.png", lines_png())},
+        data={"format": "svg", "centerline": "true", "min_length": 5},
+    )
+    assert r.status_code == 200 and b"stroke=" in r.content
