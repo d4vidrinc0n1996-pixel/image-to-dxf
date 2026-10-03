@@ -5,7 +5,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from .vectorize import ImageError, Options, to_dxf, to_svg, vectorize
+from .vectorize import ImageError, Options, convert
 
 STATIC = Path(__file__).parent / "static"
 MAX_BYTES = 20 * 1024 * 1024
@@ -14,33 +14,41 @@ app = FastAPI(title="image-to-dxf")
 
 
 @app.post("/api/convert")
-async def convert(
+async def api_convert(
     file: UploadFile = File(...),
-    format: Literal["svg", "dxf"] = Form("dxf"),
+    format: Literal["svg", "dxf", "zip"] = Form("dxf"),
+    colors: int = Form(1, ge=1, le=16),
     threshold: int | None = Form(None, ge=0, le=255),
     invert: bool = Form(False),
     blur: int = Form(0, ge=0, le=31),
+    curves: bool = Form(True),
+    smooth: float = Form(1.0, ge=0, le=1.34),
+    opt_tolerance: float = Form(0.2, ge=0, le=5),
     epsilon: float = Form(1.0, ge=0, le=50),
     min_area: float = Form(20.0, ge=0),
+    skip_background: bool = Form(True),
+    max_dim: int = Form(2000, ge=100, le=6000),
     scale: float = Form(1.0, gt=0),
+    width_mm: float | None = Form(None, gt=0),
+    dxf_curves: Literal["spline", "polyline"] = Form("spline"),
+    tolerance: float = Form(0.1, gt=0),
 ):
     data = await file.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise HTTPException(413, "Imagen demasiado grande (máx. 20 MB)")
-    opts = Options(threshold, invert, blur, epsilon, min_area, scale)
+    opts = Options(
+        colors, threshold, invert, blur, curves, smooth, opt_tolerance, epsilon,
+        min_area, skip_background, max_dim, scale, width_mm, dxf_curves, tolerance,
+    )
+    stem = Path(file.filename or "imagen").stem
     try:
-        vec = vectorize(data, opts)
+        body, mime = convert(data, format, opts, stem)
     except ImageError as e:
         raise HTTPException(400, str(e))
-    stem = Path(file.filename or "imagen").stem
-    if format == "svg":
-        body, mime = to_svg(vec).encode(), "image/svg+xml"
-    else:
-        body, mime = to_dxf(vec, scale), "application/dxf"
+    name = f"{stem}.{format}"
     return Response(
-        body,
-        media_type=mime,
-        headers={"Content-Disposition": f'attachment; filename="{stem}.{format}"'},
+        body, media_type=mime,
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
 
 

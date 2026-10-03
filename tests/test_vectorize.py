@@ -1,60 +1,128 @@
+import io
+import zipfile
+
 import cv2
 import ezdxf
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.vectorize import Options, to_dxf, to_svg, vectorize
+from app.vectorize import ImageError, Options, to_dxf, to_svg, vectorize
 
 
-def png(draw) -> bytes:
-    img = np.full((100, 200, 3), 255, np.uint8)
+def png(draw, bg=255) -> bytes:
+    img = np.full((300, 400, 3), bg, np.uint8)
     draw(img)
     return cv2.imencode(".png", img)[1].tobytes()
 
 
 def rect_png() -> bytes:
-    return png(lambda i: cv2.rectangle(i, (20, 20), (120, 80), (0, 0, 0), -1))
+    return png(lambda i: cv2.rectangle(i, (20, 20), (220, 180), (0, 0, 0), -1))
 
 
-def test_rectangle_is_one_polygon():
-    vec = vectorize(rect_png())
-    assert (vec.width, vec.height) == (200, 100)
-    assert len(vec.polygons) == 1
-    assert len(vec.polygons[0]) == 4
-
-
-def test_hole_gives_two_contours():
+def ring_and_rect() -> bytes:
     def draw(i):
-        cv2.rectangle(i, (20, 20), (120, 80), (0, 0, 0), -1)
-        cv2.circle(i, (70, 50), 15, (255, 255, 255), -1)
+        cv2.circle(i, (120, 150), 80, (0, 0, 255), -1)  # rojo (BGR)
+        cv2.circle(i, (120, 150), 30, (255, 255, 255), -1)
+        cv2.rectangle(i, (250, 60), (360, 240), (200, 0, 0), -1)  # azul
 
-    assert len(vectorize(png(draw)).polygons) == 2
-
-
-def test_invert_and_min_area():
-    vec = vectorize(rect_png(), Options(invert=True, min_area=1e6))
-    assert vec.polygons == []
+    return png(draw)
 
 
-def test_svg_and_dxf_output(tmp_path):
+def read_dxf(b: bytes):
+    return ezdxf.read(io.StringIO(b.decode()))
+
+
+def test_bilevel_rectangle():
     vec = vectorize(rect_png())
-    assert "<path" in to_svg(vec)
-    f = tmp_path / "o.dxf"
-    f.write_bytes(to_dxf(vec, scale=0.5))
-    doc = ezdxf.readfile(f)
-    polys = list(doc.modelspace().query("LWPOLYLINE"))
-    assert len(polys) == 1 and polys[0].closed
-    xs = [p[0] for p in polys[0].get_points()]
-    ys = [p[1] for p in polys[0].get_points()]
-    assert max(xs) - min(xs) == 50  # 100 px * 0.5
-    assert min(ys) >= 0  # Y flipped, upright in CAD
+    assert (vec.width, vec.height) == (400, 300)
+    assert [l.name for l in vec.layers] == ["TRAZO"]
+    assert len(vec.layers[0].paths) == 1
+
+
+def test_hole_gives_two_paths():
+    def draw(i):
+        cv2.rectangle(i, (20, 20), (220, 180), (0, 0, 0), -1)
+        cv2.circle(i, (120, 100), 30, (255, 255, 255), -1)
+
+    assert len(vectorize(png(draw)).layers[0].paths) == 2
+
+
+def test_curves_vs_polygons():
+    data = ring_and_rect()
+    curved = vectorize(data, Options(colors=3))
+    flat = vectorize(data, Options(colors=3, curves=False))
+    has_curve = lambda v: any(c1 is not None for l in v.layers for p in l.paths for c1, _, _ in p.segments)
+    assert has_curve(curved) and not has_curve(flat)
+    # una curva necesita muchos menos nodos que el polígono equivalente
+    n = lambda v: sum(len(p.segments) for l in v.layers for p in l.paths)
+    assert n(curved) < n(flat)
+
+
+def test_color_layers_ignore_background():
+    vec = vectorize(ring_and_rect(), Options(colors=3))
+    assert sorted(l.name.split("_")[-1] for l in vec.layers) == ["0000C8", "FF0000"]
+    keep = vectorize(ring_and_rect(), Options(colors=3, skip_background=False))
+    assert len(keep.layers) == 3
+
+
+def test_svg_has_curves_and_color_groups():
+    svg = to_svg(vectorize(ring_and_rect(), Options(colors=3)))
+    assert 'fill="#FF0000"' in svg and 'fill="#0000C8"' in svg and "C" in svg
+
+
+@pytest.mark.parametrize("mode,kind", [("spline", "SPLINE"), ("polyline", "LWPOLYLINE")])
+def test_dxf_curve_modes_and_layers(mode, kind):
+    vec = vectorize(ring_and_rect(), Options(colors=3))
+    doc = read_dxf(to_dxf(vec, scale=0.1, curve_mode=mode))
+    ents = list(doc.modelspace())
+    assert kind in {e.dxftype() for e in ents}
+    assert {e.dxf.layer for e in ents} == {l.name for l in vec.layers}
+    assert doc.layers.get("COLOR_2_FF0000").rgb == (255, 0, 0)
+
+
+def test_dxf_width_mm_and_orientation():
+    vec = vectorize(rect_png(), Options(curves=False))
+    doc = read_dxf(to_dxf(vec, width_mm=100))  # imagen de 400 px -> 100 mm
+    pts = list(list(doc.modelspace())[0].get_points())
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    assert max(xs) - min(xs) == pytest.approx(200 * 0.25)  # rectángulo de 200 px
+    assert min(ys) > 0  # Y hacia arriba: el rectángulo estaba arriba en la imagen
+    assert min(ys) == pytest.approx((300 - 180) * 0.25, abs=0.5)
+
+
+def test_downscale_keeps_physical_size():
+    big = np.full((600, 800, 3), 255, np.uint8)
+    cv2.rectangle(big, (100, 100), (500, 400), (0, 0, 0), -1)
+    data = cv2.imencode(".png", big)[1].tobytes()
+    vec = vectorize(data, Options(curves=False, max_dim=400))
+    assert vec.traced_w == 400 and vec.ratio == 2
+    doc = read_dxf(to_dxf(vec, scale=1.0))
+    xs = [p[0] for p in list(doc.modelspace())[0].get_points()]
+    assert max(xs) - min(xs) == pytest.approx(400, abs=3)  # 400 px originales
+
+
+def test_transparent_png_and_errors():
+    img = np.zeros((100, 100, 4), np.uint8)
+    cv2.circle(img, (50, 50), 30, (0, 0, 0, 255), -1)
+    vec = vectorize(cv2.imencode(".png", img)[1].tobytes())
+    assert len(vec.layers[0].paths) == 1
+    with pytest.raises(ImageError):
+        vectorize(b"basura")
+    with pytest.raises(ValueError):
+        vectorize(rect_png(), Options(colors=99))
 
 
 def test_api():
     c = TestClient(app)
-    r = c.post("/api/convert", files={"file": ("a.png", rect_png())}, data={"format": "dxf"})
-    assert r.status_code == 200 and b"LWPOLYLINE" in r.content
+    files = {"file": ("logo.png", ring_and_rect())}
+    r = c.post("/api/convert", files=files, data={"format": "dxf", "colors": 3})
+    assert r.status_code == 200 and b"SPLINE" in r.content
+    r = c.post("/api/convert", files=files, data={"format": "zip", "colors": 3})
+    assert sorted(zipfile.ZipFile(io.BytesIO(r.content)).namelist()) == ["logo.dxf", "logo.svg"]
     r = c.post("/api/convert", files={"file": ("a.png", b"basura")})
     assert r.status_code == 400
+    r = c.post("/api/convert", files=files, data={"colors": 99})
+    assert r.status_code == 422
     assert c.get("/").status_code == 200

@@ -5,51 +5,76 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Imagen a DXF</title>
 <style>
-  body{font-family:system-ui,sans-serif;max-width:820px;margin:0 auto;padding:16px;color:#222}
+  body{font-family:system-ui,sans-serif;max-width:900px;margin:0 auto;padding:16px;color:#222}
   fieldset{border:1px solid #ccc;border-radius:8px;margin:12px 0}
   label{display:block;margin:8px 0;font-size:14px}
-  input[type=number]{width:90px}
-  button{padding:10px 18px;margin-right:8px;font-size:15px;cursor:pointer}
-  #preview{margin-top:16px;border:1px solid #ddd;min-height:80px;background:#fafafa}
+  input[type=number],select{width:100px}
+  button{padding:10px 18px;margin:4px 8px 4px 0;font-size:15px;cursor:pointer}
+  #preview{margin-top:16px;border:1px solid #ddd;background:
+    repeating-conic-gradient(#f3f3f3 0% 25%,#fff 0% 50%) 0 0/16px 16px;min-height:80px}
   #preview svg{max-width:100%;height:auto;display:block}
-  #msg{color:#b00020}
+  #msg{color:#b00020} #info{color:#666;font-size:13px}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 24px}
 </style>
 </head>
 <body>
 <h1>Imagen a vectores / DXF</h1>
 <input type="file" id="file" accept="image/*">
-<fieldset><legend>Opciones</legend>
-  <label>Umbral (vacío = automático) <input type="number" id="threshold" min="0" max="255"></label>
+<fieldset><legend>Vectorización</legend><div class="cols">
+  <label>Colores (1 = blanco y negro, 2-16 = capas)
+    <input type="number" id="colors" value="1" min="1" max="16"></label>
+  <label><input type="checkbox" id="curves" checked> Curvas Bézier (desmarcar = polígonos)</label>
+  <label>Suavidad de esquinas (0 - 1.33) <input type="number" id="smooth" value="1" min="0" max="1.33" step="0.1"></label>
+  <label>Umbral B/N (vacío = auto) <input type="number" id="threshold" min="0" max="255"></label>
   <label><input type="checkbox" id="invert"> Invertir (trazar zonas claras)</label>
-  <label>Suavizado (blur) <input type="number" id="blur" value="0" min="0" max="31"></label>
-  <label>Simplificación (px) <input type="number" id="epsilon" value="1" min="0" step="0.5"></label>
+  <label>Reducir ruido (blur) <input type="number" id="blur" value="0" min="0" max="31"></label>
   <label>Área mínima (px²) <input type="number" id="min_area" value="20" min="0"></label>
-  <label>Escala DXF (mm por píxel) <input type="number" id="scale" value="1" min="0.001" step="0.01"></label>
-</fieldset>
-<button id="svg">Vista previa / SVG</button>
+  <label><input type="checkbox" id="skip_background" checked> Ignorar color de fondo</label>
+</div></fieldset>
+<fieldset><legend>DXF</legend><div class="cols">
+  <label>Ancho final (mm, vacío = usar escala) <input type="number" id="width_mm" min="0" step="1"></label>
+  <label>Escala (mm por píxel) <input type="number" id="scale" value="1" min="0.001" step="0.01"></label>
+  <label>Curvas en DXF
+    <select id="dxf_curves"><option value="spline">Splines</option>
+    <option value="polyline">Polilíneas (más compatible)</option></select></label>
+</div></fieldset>
+<button id="preview_btn">Vista previa</button>
 <button id="dxf">Descargar DXF</button>
-<span id="msg"></span>
+<button id="svg">Descargar SVG</button>
+<button id="zip">Descargar ambos (ZIP)</button>
+<span id="msg"></span> <span id="info"></span>
 <div id="preview"></div>
 <script>
 const $ = id => document.getElementById(id);
-async function run(format){
-  $('msg').textContent = '';
-  if(!$('file').files[0]){ $('msg').textContent = 'Elige una imagen'; return; }
+async function run(format, download){
+  $('msg').textContent = ''; $('info').textContent = '';
+  const f = $('file').files[0];
+  if(!f){ $('msg').textContent = 'Elige una imagen'; return; }
   const fd = new FormData();
-  fd.append('file', $('file').files[0]);
+  fd.append('file', f);
   fd.append('format', format);
-  for(const k of ['threshold','blur','epsilon','min_area','scale'])
+  for(const k of ['colors','smooth','threshold','blur','min_area','width_mm','scale','dxf_curves'])
     if($(k).value !== '') fd.append(k, $(k).value);
-  fd.append('invert', $('invert').checked);
+  for(const k of ['invert','curves','skip_background']) fd.append(k, $(k).checked);
+  $('info').textContent = 'Procesando…';
   const r = await fetch('/api/convert', {method:'POST', body:fd});
-  if(!r.ok){ $('msg').textContent = (await r.json()).detail || 'Error'; return; }
+  $('info').textContent = '';
+  if(!r.ok){
+    let d = 'Error'; try{ const j = await r.json(); d = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail); }catch(e){}
+    $('msg').textContent = d; return;
+  }
   const blob = await r.blob();
   if(format === 'svg') $('preview').innerHTML = await blob.text();
-  const a = document.createElement('a');
-  if(format === 'dxf'){ a.href = URL.createObjectURL(blob); a.download = 'salida.dxf'; a.click(); }
+  if(download){
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = f.name.replace(/\.[^.]+$/, '') + '.' + format; a.click();
+  }
 }
-$('svg').onclick = () => run('svg');
-$('dxf').onclick = () => run('dxf');
+$('preview_btn').onclick = () => run('svg', false);
+$('svg').onclick = () => run('svg', true);
+$('dxf').onclick = () => run('dxf', true);
+$('zip').onclick = () => run('zip', true);
 </script>
 </body>
 </html>
