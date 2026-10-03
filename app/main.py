@@ -30,6 +30,8 @@ async def api_convert(
     centerline: bool = Form(False),
     min_length: float = Form(10.0, ge=0),
     crop: str | None = Form(None, description="x0,y0,x1,y1 en píxeles"),
+    denoise: bool = Form(True),
+    upscale: int | None = Form(None, ge=1, le=4),
     max_dim: int = Form(2000, ge=100, le=6000),
     scale: float = Form(1.0, gt=0),
     width_mm: float | None = Form(None, gt=0),
@@ -47,8 +49,11 @@ async def api_convert(
         except (ValueError, AssertionError):
             raise HTTPException(422, "crop debe ser x0,y0,x1,y1")
     opts = Options(
-        colors, threshold, invert, blur, curves, smooth, opt_tolerance, epsilon,
-        min_area, skip_background, centerline, min_length, box, max_dim, scale, width_mm, dxf_curves, tolerance,
+        colors=colors, threshold=threshold, invert=invert, blur=blur, curves=curves,
+        smooth=smooth, opt_tolerance=opt_tolerance, epsilon=epsilon, min_area=min_area,
+        skip_background=skip_background, centerline=centerline, min_length=min_length,
+        crop=box, denoise=denoise, upscale=upscale, max_dim=max_dim, scale=scale,
+        width_mm=width_mm, dxf_curves=dxf_curves, tolerance=tolerance,
     )
     stem = Path(file.filename or "imagen").stem
     try:

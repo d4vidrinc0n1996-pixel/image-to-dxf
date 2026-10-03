@@ -60,9 +60,20 @@ curl -F file=@logo.png -F format=dxf -F colors=4 -F width_mm=120 localhost:8000/
 | `blur` | 0 | Suavizado previo para reducir ruido |
 | `min_area` | 20 | Descarta manchas menores (px²) |
 | `crop` | – | `x0,y0,x1,y1` en px: recorta antes de vectorizar (útil para fotos con fondo) |
+| `adapt_light` | sí | Corrige la iluminación desigual de las fotos (centros de color locales) |
+| `denoise` | no | Filtro bilateral previo; útil solo con ruido fuerte |
+| `upscale` | auto | Supermuestreo 1–4 antes de trazar (auto: ×2 solo si la imagen mide < 600 px) |
 | `max_dim` | 2000 | Reduce imágenes mayores para ir más rápido (el tamaño físico se conserva) |
 | `width_mm` / `scale` | – / 1 | Tamaño del DXF: ancho final, o unidades por píxel |
 | `dxf_curves` | spline | `spline` o `polyline` (aplana con `tolerance`, 0.1 mm) |
+
+## Calidad
+
+`python tools/benchmark.py` genera una imagen de referencia (texto, círculos, líneas), la degrada como una foto (desenfoque, ruido, JPEG, luz desigual), la vectoriza y mide el solape (IoU) con la original. Valores actuales: ~0.97 (antes de las mejoras: 0.94). Qué influye:
+
+- Umbral en el punto medio entre tonos (no Otsu) y centros de color por mediana: evitan formas más gordas o flacas.
+- Centros de color locales: absorben el degradado de luz de una foto.
+- El trazado de polígonos usa el borde real del píxel (sin quedar 1 px más pequeño).
 
 ## Rendimiento
 

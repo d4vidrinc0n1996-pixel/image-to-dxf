@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import cv2
 import ezdxf
@@ -36,6 +36,9 @@ class Options:
     centerline: bool = False  # trazos finos -> una línea central (abierta) en vez de contorno
     min_length: float = 10.0  # centerline: descarta líneas más cortas (px)
     crop: tuple[int, int, int, int] | None = None  # (x0, y0, x1, y1) en píxeles originales
+    denoise: bool = False  # filtro que quita ruido de foto sin borrar bordes
+    adapt_light: bool = True  # corrige la iluminación desigual de las fotos
+    upscale: int | None = None  # supermuestreo antes de trazar (None = automático)
     max_dim: int = 2000  # reduce imágenes más grandes para ir más rápido
     # --- DXF ---
     scale: float = 1.0  # unidades por píxel original
@@ -244,45 +247,57 @@ def _trace_mask(mask: np.ndarray, o: Options) -> list[Path]:
     """mask: bool, True = zona a vectorizar."""
     if o.centerline:
         return _trace_centerline(mask, o)
-    if o.curves:
-        bm = potrace.Bitmap(~mask)  # potracer traza lo que NO es True
-        plist = bm.trace(
-            turdsize=int(o.min_area),
-            turnpolicy=potrace.POTRACE_TURNPOLICY_MINORITY,
-            alphamax=o.smooth,
-            opticurve=o.opt_tolerance > 0,
-            opttolerance=max(o.opt_tolerance, 1e-6),
-        )
-        out = []
-        for c in plist:
-            segs: list[Segment] = []
-            for s in c.segments:
-                end = (s.end_point.x, s.end_point.y)
-                if s.is_corner:
-                    segs.append((None, None, (s.c.x, s.c.y)))
-                    segs.append((None, None, end))
-                else:
-                    segs.append(((s.c1.x, s.c1.y), (s.c2.x, s.c2.y), end))
-            out.append(Path((c.start_point.x, c.start_point.y), segs))
-        return out
-
-    contours, _ = cv2.findContours(
-        mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
+    plist = potrace.Bitmap(~mask).trace(  # potracer traza lo que NO es True
+        turdsize=int(o.min_area),
+        turnpolicy=potrace.POTRACE_TURNPOLICY_MINORITY,
+        alphamax=o.smooth if o.curves else 0.0,  # 0 = todo esquinas (polígonos)
+        opticurve=o.curves and o.opt_tolerance > 0,
+        opttolerance=max(o.opt_tolerance, 1e-6),
     )
     out = []
-    for c in contours:
-        if cv2.contourArea(c) < o.min_area:
-            continue
-        if o.epsilon > 0:
-            c = cv2.approxPolyDP(c, o.epsilon, True)
-        if len(c) >= 3:
-            pts = [(float(x), float(y)) for x, y in c.reshape(-1, 2)]
-            out.append(Path(pts[0], [(None, None, p) for p in pts[1:] + pts[:1]]))
+    for c in plist:
+        segs: list[Segment] = []
+        for s in c.segments:
+            end = (s.end_point.x, s.end_point.y)
+            if s.is_corner:
+                segs.append((None, None, (s.c.x, s.c.y)))
+                segs.append((None, None, end))
+            else:
+                segs.append(((s.c1.x, s.c1.y), (s.c2.x, s.c2.y), end))
+        path = Path((c.start_point.x, c.start_point.y), segs)
+        if not o.curves:
+            path = _simplify(path, o.epsilon)
+        if path:
+            out.append(path)
     return out
 
 
-def _quantize(img: np.ndarray, k: int):
-    """k-means sobre una muestra; devuelve (etiquetas HxW, centros BGR)."""
+def _simplify(path: Path, eps: float) -> Path | None:
+    """Polígono con menos vértices (los bordes de potrace caen en el borde real del píxel)."""
+    pts = [path.start] + [e for _, _, e in path.segments]
+    arr = np.array(pts[:-1], np.float32).reshape(-1, 1, 2)
+    if eps > 0:
+        arr = cv2.approxPolyDP(arr, eps, True)
+    pts = [(float(x), float(y)) for x, y in arr.reshape(-1, 2)]
+    if len(pts) < 3:
+        return None
+    return Path(pts[0], [(None, None, q) for q in pts[1:] + pts[:1]])
+
+
+def _assign(flat: np.ndarray, centers: np.ndarray) -> np.ndarray:
+    labels = np.empty(len(flat), np.int32)
+    for i in range(0, len(flat), 200_000):  # por bloques para no gastar memoria
+        d = ((flat[i : i + 200_000, None, :] - centers[None]) ** 2).sum(-1)
+        labels[i : i + 200_000] = d.argmin(1)
+    return labels
+
+
+def _quantize(img: np.ndarray, k: int, adapt: bool = True):
+    """k-means sobre una muestra; devuelve (etiquetas HxW, centros BGR).
+
+    Con adapt=True el color de referencia de cada grupo se vuelve a estimar por zonas,
+    para que la iluminación desigual de una foto no mueva los bordes.
+    """
     h, w = img.shape[:2]
     flat = img.reshape(-1, 3).astype(np.float32)
     rng = np.random.default_rng(0)
@@ -290,16 +305,70 @@ def _quantize(img: np.ndarray, k: int):
     cv2.setRNGSeed(0)
     crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.5)
     _, _, centers = cv2.kmeans(sample, k, None, crit, 3, cv2.KMEANS_PP_CENTERS)
-    labels = np.empty(len(flat), np.int32)
-    for i in range(0, len(flat), 200_000):  # por bloques para no gastar memoria
-        d = ((flat[i : i + 200_000, None, :] - centers[None]) ** 2).sum(-1)
-        labels[i : i + 200_000] = d.argmin(1)
-    return labels.reshape(h, w), centers
+    # centros robustos: mediana de los píxeles de cada grupo (el borde desenfocado
+    # mezcla colores y desplazaría el promedio, engordando o adelgazando las formas)
+    near = ((sample[:, None, :] - centers[None]) ** 2).sum(-1).argmin(1)
+    for c in range(k):
+        pts = sample[near == c]
+        if len(pts) >= 20:
+            centers[c] = np.median(pts, axis=0)
+    labels = _assign(flat, centers).reshape(h, w)
+    if not adapt or k < 2:
+        return labels, centers
+
+    # --- centros locales (convolución normalizada, a 1/4 de resolución) ---
+    sh, sw = max(h // 4, 1), max(w // 4, 1)
+    small = cv2.resize(img.astype(np.float32), (sw, sh), interpolation=cv2.INTER_AREA)
+    sigma = max(sh, sw) / 5
+    best = np.full((h, w), np.inf, np.float32)
+    new = np.zeros((h, w), np.int32)
+    imgf = img.astype(np.float32)
+    for c in range(k):
+        m = cv2.resize((labels == c).astype(np.float32), (sw, sh), interpolation=cv2.INTER_AREA)
+        # solo píxeles "puros" (lejos de bordes) para que la mezcla no sesgue el color
+        pure = (m > 0.95).astype(np.float32)
+        num = cv2.GaussianBlur(small * pure[..., None], (0, 0), sigma)
+        den = cv2.GaussianBlur(pure, (0, 0), sigma)[..., None]
+        eps = 0.02
+        local = (num + eps * centers[c]) / (den + eps)
+        local = cv2.resize(local, (w, h), interpolation=cv2.INTER_LINEAR)
+        d = ((imgf - local) ** 2).sum(-1)
+        upd = d < best
+        best[upd] = d[upd]
+        new[upd] = c
+    return new, centers
 
 
-def _clean(mask: np.ndarray) -> np.ndarray:
-    """Quita motas y suaviza bordes de una máscara por color (mediana 5x5)."""
-    return cv2.medianBlur(mask.astype(np.uint8) * 255, 5) > 127
+def _balanced_threshold(gray: np.ndarray) -> float:
+    """Umbral en el punto medio entre el tono oscuro y el claro (ISODATA, partiendo de Otsu).
+
+    Otsu puede quedar cerca de un extremo cuando hay bordes suavizados y eso engorda
+    o adelgaza las formas; el punto medio coloca el borde donde realmente está.
+    """
+    t, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    for _ in range(20):
+        lo, hi = gray[gray <= t], gray[gray > t]
+        if len(lo) == 0 or len(hi) == 0:
+            break
+        # los extremos puros dominan la media; el punto medio entre ellos es el borde
+        nt = (float(np.median(lo)) + float(np.median(hi))) / 2
+        if abs(nt - t) < 0.5:
+            t = nt
+            break
+        t = nt
+    return t
+
+
+def _clean(mask: np.ndarray, u: int = 1) -> np.ndarray:
+    """Quita motas y suaviza bordes de una máscara por color (mediana pequeña)."""
+    return cv2.medianBlur(mask.astype(np.uint8) * 255, 3 if u == 1 else 5) > 127
+
+
+def _rescale(paths: list[Path], f: float) -> None:
+    sc = lambda p: None if p is None else (p[0] * f, p[1] * f)
+    for p in paths:
+        p.start = sc(p.start)
+        p.segments = [(sc(a), sc(b), sc(e)) for a, b, e in p.segments]
 
 
 def vectorize(data: bytes, opts: Options | None = None) -> Vector:
@@ -336,17 +405,26 @@ def vectorize(data: bytes, opts: Options | None = None) -> Vector:
         k = o.blur | 1
         img = cv2.GaussianBlur(img, (k, k), 0)
 
+    if o.denoise and o.colors > 1:
+        # bilateral: aplana el ruido dentro de cada zona y conserva los bordes
+        img = cv2.bilateralFilter(img, 9, 40, 7)
+        img = cv2.bilateralFilter(img, 9, 40, 7)
+    u = o.upscale or (2 if max(h, w) < 600 else 1)  # solo ayuda en imágenes pequeñas y limpias
+    if u > 1:  # bordes con precisión subpíxel: se traza más grande y se reduce
+        img = cv2.resize(img, (w * u, h * u), interpolation=cv2.INTER_CUBIC)
+    o = replace(o, min_area=o.min_area * u * u, epsilon=o.epsilon * u, min_length=o.min_length * u)
+
     layers: list[Layer] = []
     if o.colors == 1:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         mode = cv2.THRESH_BINARY if o.invert else cv2.THRESH_BINARY_INV
         if o.threshold is None:
-            _, m = cv2.threshold(gray, 0, 255, mode | cv2.THRESH_OTSU)
+            m = cv2.threshold(gray, _balanced_threshold(gray), 255, mode)[1]
         else:
             _, m = cv2.threshold(gray, o.threshold, 255, mode)
         layers.append(Layer("TRAZO", (0, 0, 0), _trace_mask(m > 0, o), o.centerline))
     else:
-        labels, centers = _quantize(img, o.colors)
+        labels, centers = _quantize(img, o.colors, o.adapt_light)
         counts = np.bincount(labels.ravel(), minlength=len(centers))
         bg = -1
         if o.skip_background:  # el color que domina el borde de la imagen
@@ -359,8 +437,11 @@ def vectorize(data: bytes, opts: Options | None = None) -> Vector:
             n += 1
             rgb = tuple(int(v) for v in centers[i][::-1].round())
             layers.append(
-                Layer(f"COLOR_{n}_{_hex(rgb)}", rgb, _trace_mask(_clean(labels == i), o), o.centerline)
+                Layer(f"COLOR_{n}_{_hex(rgb)}", rgb, _trace_mask(_clean(labels == i, u), o), o.centerline)
             )
+    if u > 1:
+        for l in layers:
+            _rescale(l.paths, 1 / u)
     layers = [l for l in layers if l.paths]
     return Vector(ow, oh, layers, ratio, w, h)
 

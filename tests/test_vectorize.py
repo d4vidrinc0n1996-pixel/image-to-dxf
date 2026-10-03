@@ -87,7 +87,7 @@ def test_dxf_width_mm_and_orientation():
     doc = read_dxf(to_dxf(vec, width_mm=100))  # imagen de 400 px -> 100 mm
     pts = list(list(doc.modelspace())[0].get_points())
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-    assert max(xs) - min(xs) == pytest.approx(200 * 0.25)  # rectángulo de 200 px
+    assert max(xs) - min(xs) == pytest.approx(201 * 0.25, abs=0.01)  # 201 px (20..220 inclusive)
     assert min(ys) > 0  # Y hacia arriba: el rectángulo estaba arriba en la imagen
     assert min(ys) == pytest.approx((300 - 180) * 0.25, abs=0.5)
 
