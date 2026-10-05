@@ -20,6 +20,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY --from=libredwg /opt/libredwg /opt/libredwg
 ENV LIBREDWG_PREFIX=/opt/libredwg PATH=/opt/libredwg/bin:$PATH LD_LIBRARY_PATH=/opt/libredwg/lib
+# Comprobación en el build: si falta, el log lo dirá claramente
+RUN (dxf2dwg --version && echo "DWG OK: LibreDWG instalado") || echo "AVISO: dxf2dwg NO disponible; DWG desactivado"
 COPY app app
 ENV PORT=8000
 EXPOSE 8000

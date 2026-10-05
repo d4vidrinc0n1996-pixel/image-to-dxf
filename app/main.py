@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -98,7 +99,11 @@ async def api_convert(
 @app.get("/api/capabilities")
 def api_capabilities():
     """Qué formatos puede producir este servidor (DWG depende de que esté instalado LibreDWG)."""
-    return {"formats": ["svg", "dxf", "zip"] + (["dwg"] if dwg.available() else [])}
+    return {
+        "formats": ["svg", "dxf", "zip"] + (["dwg"] if dwg.available() else []),
+        "dwg": dwg.status(),
+        "commit": os.environ.get("RENDER_GIT_COMMIT", "")[:7] or None,
+    }
 
 
 @app.post("/api/detect-panel")
