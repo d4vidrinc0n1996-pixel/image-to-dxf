@@ -1,4 +1,6 @@
-# image-to-dxf
+<p align="center"><img src="app/static/logo-wordmark.svg" alt="TrazaCAD" height="90"></p>
+
+# TrazaCAD
 
 Convierte imágenes (PNG, JPG, BMP, WebP…) a vectores **SVG** y **DXF**, con:
 
@@ -24,7 +26,7 @@ pip install -r requirements.txt
 ```bash
 uvicorn app.main:app --reload     # http://localhost:8000
 # o con Docker:
-docker build -t image-to-dxf . && docker run -p 8000:8000 image-to-dxf
+docker build -t trazacad . && docker run -p 8000:8000 trazacad
 ```
 
 ## Línea de comandos
@@ -102,6 +104,10 @@ python -m app.cli letrero.jpg -o letrero.dwg --auto-perspective --colors 2 --wid
 ## Rendimiento
 
 Una imagen de 2000 px tarda ~3 s en B/N y ~10 s con 6 colores (el trazador es Python puro).
+
+## Logotipo
+
+`python tools/make_logo.py` regenera el logo (SVG y PNG) en `app/static/`: ícono, versión horizontal clara y oscura, favicon, ícono de 192/512 px, `apple-touch-icon` e imagen para compartir (`og.png`). Para cambiar el nombre o los colores edita las constantes del principio del script.
 
 ## Pruebas
 

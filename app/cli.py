@@ -1,4 +1,4 @@
-"""Uso: python -m app.cli logo.png foto.jpg -o salida/ --colors 4 --width-mm 100"""
+"""TrazaCAD. Uso: python -m app.cli logo.png foto.jpg -o salida/ --colors 4 --width-mm 100"""
 import argparse
 from pathlib import Path
 
@@ -6,7 +6,7 @@ from .vectorize import Options, convert
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Imagen -> SVG/DXF (curvas y capas de color)")
+    p = argparse.ArgumentParser(description="TrazaCAD: imagen -> SVG/DXF/DWG (curvas y capas de color)")
     p.add_argument("inputs", nargs="+")
     p.add_argument("-o", "--output", required=True,
                    help="archivo (.svg/.dxf/.dwg) si hay una entrada; carpeta si hay varias")

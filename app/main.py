@@ -15,7 +15,7 @@ from .vectorize import ImageError, Options, convert, decode, prepare
 STATIC = Path(__file__).parent / "static"
 MAX_BYTES = 20 * 1024 * 1024
 
-app = FastAPI(title="image-to-dxf")
+app = FastAPI(title="TrazaCAD", description="Imágenes a vectores, DXF y DWG")
 
 
 def parse_corners(text: str | None):
